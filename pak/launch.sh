@@ -12,7 +12,8 @@
 #   PokeDaisy/saves/   battery saves (<full ROM filename>.sav: Emerald.gba.sav, Platinum.nds.sav)
 #   PokeDaisy/states/  save states
 #   PokeDaisy/roms/    leave empty (mount point)
-#   PokeDaisy/.unzipped/  unpacked copies of zipped Pokemon games (safe to delete; rebuilt as needed)
+#   PokeDaisy/.unzipped/  unpacked copies of zipped supported games (safe to delete; rebuilt as needed)
+#   PokeDaisy/.verdicts   which files are on the compatibility list (safe to delete)
 set -eu
 PAK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SD="${SDCARD_PATH:-/mnt/SDCARD}"
@@ -65,46 +66,83 @@ IFS=$oldifs
 if [ "$count" -ge 1 ]; then
   links=$(mktemp -d "${TMPDIR:-/tmp}/pokedaisy-roms.XXXXXX" 2>/dev/null) || links=""
 fi
-# Like the Android library, list only Pokemon games: each ROM's header says which game it is.
-#   GBA (game code at 0xAC): Ruby AXV, Sapphire AXP, Emerald BPE, FireRed BPR, LeafGreen BPG
-#     (hacks built on these keep the base game's code)
-#   DS (game code at 0x0C): Diamond ADA, Pearl APA, Platinum CPU, HeartGold IPK, SoulSilver IPG,
-#     Black IRB, White IRA, Black 2 IRE, White 2 IRD
-#   GB/GBC (title at 0x134): POKEMON RED/BLUE/GREEN/YELLOW, POKEMON_GLD/_SLV, PM_CRYSTAL
-#   (main-series games only, like the companion: spin-offs such as Pinball, Puzzle Challenge,
-#   Trading Card Game and Mystery Dungeon are left out)
-# POKEDAISY_ALL=1 lists every game; without dd nothing is hidden.
-header() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | tr -d '\000'; }
-is_pokemon() {
-  [ "${POKEDAISY_ALL:-0}" = 1 ] && return 0
-  command -v dd > /dev/null 2>&1 || return 0
-  case "$1" in
-    *.gba|*.GBA)
-      case "$(header "$1" 172 3)" in AXV|AXP|BPE|BPR|BPG) return 0 ;; esac ;;
-    *.nds|*.NDS)
-      case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac ;;
-    *)
-      case "$(header "$1" 308 16)" in 'POKEMON RED'*|'POKEMON BLUE'*|'POKEMON GREEN'*|'POKEMON YELLOW'*|POKEMON_GLD*|POKEMON_SLV*|PM_CRYSTAL*) return 0 ;; esac ;;
-  esac
-  return 1
+# Like the Android library, list only the games on PokeDaisy's compatibility list
+# (https://pokedaisy.com/compatibility/), checked the same way as its ROM check and the app:
+#   Game Boy / Color: the ROM's SHA-1 is a supported build (retail or hack)
+#   GBA: a supported retail cart + revision (header), or a supported hack / retail build (SHA-1)
+#   DS: a supported cart + revision (header), or a DS hack under a retail header (a word in its code)
+# The list is compat.txt, made from upstream's own data at every build. Not covered here: trimmed or
+# flash-patched retail dumps and Universal Randomizer copies (the app recognises those too).
+# Verdicts are cached in PokeDaisy/.verdicts per file size + date and list version.
+# POKEDAISY_ALL=1 lists every game.
+COMPAT="$PAK_DIR/compat.txt"
+VCACHE="$DATA/.verdicts"; NEWV="$VCACHE.new"; : > "$NEWV"
+CHECK=1
+if [ "${POKEDAISY_ALL:-0}" = 1 ]; then CHECK=0
+elif [ ! -s "$COMPAT" ]; then CHECK=0; echo "No compatibility list: listing every game" >> "$LOG"
+else
+  for t in od dd sha1sum grep; do
+    command -v "$t" > /dev/null 2>&1 || { CHECK=0; echo "No $t: listing every game" >> "$LOG"; }
+  done
+fi
+MAXBASE=$(sed -n 's/^MAXBASE //p' "$COMPAT" 2>/dev/null); MAXBASE=${MAXBASE:-16777216}
+# Cached verdicts belong to one version of the list: a newer pak's list (new games, new hacks)
+# makes every file be checked again.
+LISTID=$(cksum < "$COMPAT" 2>/dev/null | cut -d' ' -f1); LISTID=${LISTID:-none}
+hexat() { od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null | tr -d ' \n'; }
+chars() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null; }
+has() { grep -qxF "$1" "$COMPAT"; }
+fsize() { wc -c < "$1" | tr -d ' '; }
+stamp() { echo "$(fsize "$1") $(date -r "$1" +%s 2>/dev/null || echo 0)"; }
+# quick <file holding the ROM's start> <ROM size, or empty>: yes / no / sha (needs the SHA-1)
+quick() {
+  if [ "$(hexat "$1" 260 4)" = ceed6666 ]; then echo sha; return; fi       # Game Boy logo at 0x104
+  if [ "$(hexat "$1" 348 2)" = 56cf ]; then                                 # DS logo checksum at 0x15C
+    code=$(chars "$1" 12 4); h=$(hexat "$1" 30 1); rev=$((0x${h:-0}))
+    if has "DS $code $rev"; then echo yes; return; fi
+    hit=$(grep "^DSHACK $code $rev " "$COMPAT" | while read -r _ _ _ off word; do
+      w=$(hexat "$1" "$off" 4); [ ${#w} = 8 ] || continue
+      le=$(( 0x$(echo "$w" | cut -c7-8)$(echo "$w" | cut -c5-6)$(echo "$w" | cut -c3-4)$(echo "$w" | cut -c1-2) ))
+      [ "$le" = "$word" ] && { echo yes; break; }
+    done)
+    if [ "$hit" = yes ]; then echo yes; else echo no; fi; return
+  fi
+  code=$(chars "$1" 172 4)                                                  # GBA game code at 0xAC
+  case "$code" in ????) ;; *) echo no; return ;; esac
+  case "$code" in *[!A-Z0-9]*) echo no; return ;; esac
+  h=$(hexat "$1" 188 1); rev=$((0x${h:-0}))
+  if grep -q "^RETAIL $code " "$COMPAT"; then
+    if has "RETAIL $code $rev" && { [ -z "$2" ] || [ "$2" -le "$MAXBASE" ]; }; then echo yes; else echo no; fi
+    return
+  fi
+  if has "BASECODE $code" || has "OWNCODE $code"; then echo sha; else echo no; fi
 }
-# Header check on the first bytes of a zip's (first) file, whatever its extension.
-is_pokemon_head() {
-  [ "${POKEDAISY_ALL:-0}" = 1 ] && return 0
-  case "$(header "$1" 172 3)" in AXV|AXP|BPE|BPR|BPG) return 0 ;; esac
-  case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac
-  case "$(header "$1" 308 16)" in 'POKEMON RED'*|'POKEMON BLUE'*|'POKEMON GREEN'*|'POKEMON YELLOW'*|POKEMON_GLD*|POKEMON_SLV*|PM_CRYSTAL*) return 0 ;; esac
-  return 1
+# full <ROM>: the verdict with its SHA-1
+full() {
+  s=$(sha1sum "$1" | cut -d' ' -f1)
+  if [ "$(hexat "$1" 260 4)" = ceed6666 ]; then
+    if has "GB $s"; then echo yes; else echo no; fi; return
+  fi
+  if has "HACK $s"; then echo yes; return; fi
+  if ! has "OWNCODE $(chars "$1" 172 4)" && [ "$(fsize "$1")" -le "$MAXBASE" ] && has "TITLE $s"; then echo yes; return; fi
+  echo no
 }
-# Zipped games: PokeDaisy reads only unpacked ROMs, so a Pokemon game's zip is unpacked once into
+remember() { echo "$1|$2" >> "$NEWV"; echo "$2"; }
+cached() { grep -F "$1|" "$VCACHE" 2>/dev/null | head -n 1 | sed 's/.*|//'; }
+verdict_file() {   # <ROM>
+  [ "$CHECK" = 1 ] || { echo yes; return; }
+  key="$LISTID|$(stamp "$1")|$1"; v=$(cached "$key")
+  if [ -z "$v" ]; then v=$(quick "$1" "$(fsize "$1")"); [ "$v" = sha ] && v=$(full "$1"); fi
+  remember "$key" "$v"
+}
+# Zipped games: PokeDaisy reads only unpacked ROMs, so a supported game's zip is unpacked once into
 # PokeDaisy/.unzipped/<zip name>/ (again only when the zip changes). .7z is not supported.
 CACHE="$DATA/.unzipped"
 unzipped_rom() {   # <zip> -> prints the unpacked ROM's path, or nothing
-  z=$1; zname=${z##*/}; dir="$CACHE/$zname"
-  stamp="$(wc -c < "$z" | tr -d ' ') $(date -r "$z" +%s 2>/dev/null)"
-  if [ ! -f "$dir/.stamp" ] || [ "$(cat "$dir/.stamp")" != "$stamp" ]; then
+  z=$1; zname=${z##*/}; dir="$CACHE/$zname"; st=$(stamp "$z")
+  if [ ! -f "$dir/.stamp" ] || [ "$(cat "$dir/.stamp")" != "$st" ]; then
     rm -rf "$dir" 2>/dev/null; mkdir -p "$dir"
-    if unzip -o -q "$z" -d "$dir" >> "$LOG" 2>&1; then echo "$stamp" > "$dir/.stamp"
+    if unzip -o -q "$z" -d "$dir" >> "$LOG" 2>&1; then echo "$st" > "$dir/.stamp"
     else echo "Could not unzip $zname" >> "$LOG"; rm -rf "$dir"; return; fi
   fi
   for r in "$dir"/*.gba "$dir"/*.GBA "$dir"/*.gbc "$dir"/*.GBC "$dir"/*.gb "$dir"/*.GB "$dir"/*.nds "$dir"/*.NDS; do
@@ -112,6 +150,22 @@ unzipped_rom() {   # <zip> -> prints the unpacked ROM's path, or nothing
   done
 }
 HEAD_TMP="${TMPDIR:-/tmp}/pokedaisy-head.$$"
+verdict_zip() {   # <zip>: yes / no; unpacks it when yes
+  key="$LISTID|$(stamp "$1")|$1"; v=""
+  [ "$CHECK" = 1 ] && v=$(cached "$key")
+  if [ -z "$v" ]; then
+    if [ "$CHECK" = 1 ]; then
+      unzip -p "$1" 2>/dev/null | head -c 262144 > "$HEAD_TMP" || true
+      v=$(quick "$HEAD_TMP" "")
+    else v=yes; fi
+    if [ "$v" = sha ]; then
+      r=$(unzipped_rom "$1")
+      if [ -n "$r" ]; then v=$(full "$r"); else v=no; fi
+      [ "$v" = yes ] || rm -rf "$CACHE/${1##*/}" 2>/dev/null
+    fi
+  fi
+  remember "$key" "$v"
+}
 games=0; skipped=0; zips=0
 if [ -n "$links" ]; then
   oldifs=$IFS; IFS=$NL
@@ -119,14 +173,13 @@ if [ -n "$links" ]; then
     for f in "$d"/*.gba "$d"/*.GBA "$d"/*.gbc "$d"/*.GBC "$d"/*.gb "$d"/*.GB "$d"/*.nds "$d"/*.NDS; do
       [ -f "$f" ] || continue
       name=${f##*/}
-      if ! is_pokemon "$f"; then skipped=$((skipped + 1)); continue; fi
+      if [ "$(verdict_file "$f")" != yes ]; then skipped=$((skipped + 1)); continue; fi
       [ -e "$links/$name" ] || { ln -s "$f" "$links/$name" && games=$((games + 1)); }
     done
     command -v unzip > /dev/null 2>&1 || continue
     for z in "$d"/*.zip "$d"/*.ZIP; do
       [ -f "$z" ] || continue
-      unzip -p "$z" 2>/dev/null | dd bs=512 count=1 2>/dev/null > "$HEAD_TMP"
-      if ! is_pokemon_head "$HEAD_TMP"; then skipped=$((skipped + 1)); continue; fi
+      if [ "$(verdict_zip "$z")" != yes ]; then skipped=$((skipped + 1)); continue; fi
       r=$(unzipped_rom "$z")
       [ -n "$r" ] || continue
       name=${r##*/}
@@ -134,11 +187,12 @@ if [ -n "$links" ]; then
     done
   done
   IFS=$oldifs
+  mv -f "$NEWV" "$VCACHE" 2>/dev/null || true
+  rm -f "$HEAD_TMP"
 fi
 if [ -n "$links" ] && { mount --bind "$links" "$DATA/roms" 2>> "$LOG" || mount -o bind "$links" "$DATA/roms" 2>> "$LOG"; }; then
   mounted=1
-  rm -f "$HEAD_TMP"
-  echo "Pokemon games: $games, $zips of them from zips (other games hidden: $skipped) from: $(printf '%s' "$FOLDERS" | tr '\n' ';')" >> "$LOG"
+  echo "Supported games: $games, $zips of them from zips (other games hidden: $skipped) from: $(printf '%s' "$FOLDERS" | tr '\n' ';')" >> "$LOG"
 elif [ "$count" -ge 1 ] && { mount --bind "$first" "$DATA/roms" 2>> "$LOG" || mount -o bind "$first" "$DATA/roms" 2>> "$LOG"; }; then
   mounted=1
   echo "Symlink folder unavailable; games from: $first only" >> "$LOG"
