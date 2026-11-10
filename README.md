@@ -13,7 +13,9 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
   own checksum-pinned NextUI/TrimUI toolchain, runs upstream's tests under QEMU, and publishes a
   release named `upstream-<commit>` with a ready-to-unzip `PokeDaisy-h700-<commit>.zip`.
 - `pak/launch.sh` replaces upstream's TrimUI launcher:
-  - keeps games, saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
+  - lists games from NextUI's own `Roms/Game Boy Advance (MGBA)` folder (bind-mounted onto
+    `PokeDaisy/roms` while PokeDaisy runs; set `POKEDAISY_ROMS` to change it);
+  - keeps PokeDaisy's saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
     updates never overwrite them;
   - turns off the TrimUI raw-button layout (NextUI-H700 rc11+ exposes the built-in controls as a
     standard SDL controller);
@@ -24,8 +26,9 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
 1. Back up `PokeDaisy/saves` on the card.
 2. Download the latest release zip and unzip it at the root of the NextUI SD card, replacing
    `Tools/h700/PokeDaisy.pak`.
-3. Put games in `PokeDaisy/roms/`. To use an existing save, copy it to
-   `PokeDaisy/saves/<full ROM filename>.sav` (PokeDaisy does not import saves on its own).
+3. Keep games in `Roms/Game Boy Advance (MGBA)/`. To use an existing save, copy it to
+   `PokeDaisy/saves/<full ROM filename>.sav`, e.g. `Emerald.gba.sav` (PokeDaisy does not import
+   saves on its own). Leave `PokeDaisy/roms/` empty.
 
 ## If it does not start
 
