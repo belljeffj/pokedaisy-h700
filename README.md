@@ -36,6 +36,16 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
     standard SDL controller);
   - logs to NextUI's logs folder as `PokeDaisy.txt`.
 
+## Release lines
+
+- **Stable** (`PokeDaisy.pak`, tags `upstream-<commit>`): lidor30/pokedaisy `main`.
+- **One-screen, experimental** (`PokeDaisy 1-Screen.pak`, pre-releases tagged `onescreen-<commit>`): the
+  Brick fork's `experiment/ds-one-screen-battles` branch (keeganwhitacre/pokedaisy-brick), which adds
+  SET > BATTLES > PANEL: the DS command screen drawn over the battle on one screen. It can be older than
+  stable, installs beside it in Tools, and shares the same `PokeDaisy/` saves.
+
+Both are checked every Monday; the Actions tab's Run workflow can build either line on demand.
+
 ## Install or update
 
 1. Back up `PokeDaisy/saves` on the card.
