@@ -45,6 +45,10 @@ Platinum, HeartGold / SoulSilver, Black / White, Black 2 / White 2. For those ot
 game memory. The companion itself stays Platinum-only. If upstream changes that code, the build goes on
 without the patch and the release notes say so.
 
+`tools/patch_ds_fit.py` also runs before every DS build: DS screens and the DS companion scale to the
+largest size that fits with the DS's 4:3 shape (640x480 on the RG SP) instead of whole-number steps
+(512x384). `POCKET_DS_INTEGER=1` in `launch.sh` restores whole-number scaling.
+
 ## Release lines
 
 - **Stable** (`PokeDaisy.pak`, tags `upstream-<commit>`): lidor30/pokedaisy `main`.

@@ -127,6 +127,13 @@ jobs:
             echo "::warning::patch_ds_battles.py no longer applies; DS battle detection is Platinum-only in this build"
             echo "DS battle detection: Platinum only (patch_ds_battles.py no longer applies upstream)" > "$RUNNER_TEMP/patch-note.txt"
           fi
+          # DS screens scale to fit the display (640x480 on the RG SP) instead of whole numbers only (2x, 512x384).
+          if python3 "$GITHUB_WORKSPACE/tools/patch_ds_fit.py" .; then
+            echo "DS screen: scaled to fit (POCKET_DS_INTEGER=1 restores whole-number scaling)" >> "$RUNNER_TEMP/patch-note.txt"
+          else
+            echo "::warning::patch_ds_fit.py no longer applies; DS screens use whole-number scaling in this build"
+            echo "DS screen: whole-number scaling (patch_ds_fit.py no longer applies upstream)" >> "$RUNNER_TEMP/patch-note.txt"
+          fi
           # libstdc++/libgcc linked in, so the device's C++ runtime version does not matter.
           cmake -S linux -B linux/build-ds-arm -DCMAKE_TOOLCHAIN_FILE=trimui-toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_LTO=OFF -DPOCKET_DSPERATE=ON \
