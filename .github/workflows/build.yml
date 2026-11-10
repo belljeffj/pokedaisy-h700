@@ -115,6 +115,14 @@ jobs:
         continue-on-error: ${{ !matrix.ds_required }}
         working-directory: upstream
         run: |
+          # Battle screen switching for every DS game in PokeDaisy's field table, not only the companion's
+          # Platinum dump (tools/patch_ds_battles.py). If upstream changed that code, build without it and say so.
+          if python3 "$GITHUB_WORKSPACE/tools/patch_ds_battles.py" .; then
+            echo "DS battle detection: Platinum, HeartGold/SoulSilver, Black/White, Black 2/White 2 (patched)" > "$RUNNER_TEMP/patch-note.txt"
+          else
+            echo "::warning::patch_ds_battles.py no longer applies; DS battle detection is Platinum-only in this build"
+            echo "DS battle detection: Platinum only (patch_ds_battles.py no longer applies upstream)" > "$RUNNER_TEMP/patch-note.txt"
+          fi
           # libstdc++/libgcc linked in, so the device's C++ runtime version does not matter.
           cmake -S linux -B linux/build-ds-arm -DCMAKE_TOOLCHAIN_FILE=trimui-toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_LTO=OFF -DPOCKET_DSPERATE=ON \
@@ -135,6 +143,7 @@ jobs:
           set -eu
           out="$RUNNER_TEMP/out"
           : > "$RUNNER_TEMP/deps.txt"
+          cat "$RUNNER_TEMP/patch-note.txt" >> "$RUNNER_TEMP/deps.txt" 2>/dev/null || true
           objdump=$NEXTUI_TOOLCHAIN/bin/aarch64-nextui-linux-gnu-objdump
           # The compatibility list (pokedaisy.com/compatibility) from this commit's own data, so new games and
           # hack versions reach the pak with each build. Without it the launcher lists every game.
@@ -214,10 +223,10 @@ jobs:
             if [ "$LINE" = one-screen ]; then
               echo "**Experimental:** the Brick fork's one-screen DS battle prototype (SET > BATTLES > PANEL),"
               echo "built from a branch that can be older than PokeDaisy's main. It installs beside the stable"
-              echo "\`PokeDaisy.pak\` and shares its saves. Battle detection is for Pokemon Platinum (USA) rev 1."
+              echo "\`PokeDaisy.pak\` and shares its saves. Battle detection: see below."
             else
-              echo "**DS is experimental:** companion only for Pokemon Platinum (USA) rev 1; other DS games are"
-              echo "emulation only."
+              echo "**DS is experimental:** the companion reads only Pokemon Platinum (USA) rev 1. AUTO battle"
+              echo "screen switching covers the games listed below."
             fi
             echo
             echo '```'
