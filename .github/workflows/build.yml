@@ -124,11 +124,11 @@ jobs:
           # One pak, like the Android app: the DS build (mGBA + DSperate) lists GBA and DS games together.
           if [ "$DS_OK" = true ]; then
             python3 upstream/linux/package.py --dsperate upstream/linux/build-ds-arm/pokedaisy-linux "$out"
-            make_pak "$out/pokedaisy-linux-aarch64-ds-experiment" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy Advance*' 'Nintendo DS*'
+            make_pak "$out/pokedaisy-linux-aarch64-ds-experiment" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy*' 'Nintendo DS*'
             echo "kind=GBA + DS" >> "$GITHUB_OUTPUT"
           else
             python3 upstream/linux/package.py upstream/linux/build-arm/pokedaisy-linux "$out"
-            make_pak "$out/pokedaisy-linux-aarch64" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy Advance*'
+            make_pak "$out/pokedaisy-linux-aarch64" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy*'
             echo "DS build failed this time; this release is GBA only." | tee -a "$RUNNER_TEMP/deps.txt"
             echo "kind=GBA only" >> "$GITHUB_OUTPUT"
           fi
