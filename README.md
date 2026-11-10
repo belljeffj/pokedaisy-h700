@@ -59,6 +59,15 @@ largest size that fits with the DS's 4:3 shape (640x480 on the RG SP) instead of
 
 Both are checked every Monday; the Actions tab's Run workflow can build either line on demand.
 
+## Updating on the device
+
+Every release zip also carries `Tools/h700/PokeDaisy Updater.pak`. Run **PokeDaisy Updater** from NextUI's
+Tools menu with Wi-Fi on: it checks this repo's releases and replaces each PokeDaisy pak you have
+(stable and/or 1-Screen) when a newer build exists, then updates itself. No progress screen; it returns to
+NextUI when done and writes `PokeDaisy Updater.txt` in NextUI's logs folder. Each pak's `RELEASE.txt`
+names the zip it came from; zips are named `<line>-<upstream commit>-b<build number>.zip`. Needs this repo
+to be public (the device has no GitHub credentials).
+
 ## Install or update
 
 1. Back up `PokeDaisy/saves` on the card.

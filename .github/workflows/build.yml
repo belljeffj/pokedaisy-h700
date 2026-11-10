@@ -195,7 +195,14 @@ jobs:
             echo "kind=GBA only" >> "$GITHUB_OUTPUT"
           fi
           base=PokeDaisy-h700; [ "$LINE" = stable ] || base="PokeDaisy-$LINE-h700"
-          zip="$RUNNER_TEMP/$base-$SHORT.zip"
+          # The build number makes every zip name new, so the on-device updater can tell a rebuild of the
+          # same upstream commit (new launcher, new patches) from what it already has.
+          name="$base-$SHORT-b$GITHUB_RUN_NUMBER.zip"
+          echo "$name" > "$RUNNER_TEMP/sd/Tools/h700/$PAK.pak/RELEASE.txt"
+          # The updater travels in every zip, so it updates itself along with the paks.
+          upd="$RUNNER_TEMP/sd/Tools/h700/PokeDaisy Updater.pak"
+          mkdir -p "$upd" && cp pak/updater/launch.sh "$upd/launch.sh" && chmod 755 "$upd/launch.sh"
+          zip="$RUNNER_TEMP/$name"
           (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools)
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
