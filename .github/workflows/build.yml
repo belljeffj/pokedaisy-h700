@@ -199,6 +199,10 @@ jobs:
           # same upstream commit (new launcher, new patches) from what it already has.
           name="$base-$SHORT-b$GITHUB_RUN_NUMBER.zip"
           echo "$name" > "$RUNNER_TEMP/sd/Tools/h700/$PAK.pak/RELEASE.txt"
+          # PokeDaisy's own version (the Android app's versionName), so the updater can name it.
+          ver=$(sed -n 's/.*versionName *= *"\([^"]*\)".*/\1/p' upstream/app/build.gradle.kts 2>/dev/null | head -n 1)
+          [ -n "$ver" ] && echo "$ver" > "$RUNNER_TEMP/sd/Tools/h700/$PAK.pak/VERSION.txt"
+          echo "PokeDaisy version: ${ver:-unknown}" | tee -a "$RUNNER_TEMP/deps.txt"
           # The updater travels in every zip, so it updates itself along with the paks.
           upd="$RUNNER_TEMP/sd/Tools/h700/PokeDaisy Updater.pak"
           mkdir -p "$upd" && cp -R pak/updater/. "$upd/" && chmod 755 "$upd/launch.sh" "$upd/bin/h700/minui-presenter"

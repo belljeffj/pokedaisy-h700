@@ -133,6 +133,10 @@ SUMMARY=""
 [ -n "${POKEDAISY_UPDATER_RERUN:-}" ] && SUMMARY="Updater: updated itself"
 note() { if [ -z "$SUMMARY" ]; then SUMMARY="$1"; else SUMMARY="$SUMMARY\n$1"; fi; }
 build_of() { b=${1##*-b}; echo "b${b%.zip}"; }
+label() {   # <pak dir> <zip name> -> "1.5.0.1 (b14)", or "b14" for builds without VERSION.txt
+  v=$(head -n 1 "$1/VERSION.txt" 2>/dev/null)
+  if [ -n "$v" ]; then echo "$v ($(build_of "$2"))"; else build_of "$2"; fi
+}
 
 update_pak() {   # <pak name> <zip name prefix>
   name=$1; prefix=$2; pak="$TOOLS/$name.pak"
@@ -141,7 +145,7 @@ update_pak() {   # <pak name> <zip name prefix>
   if [ -z "$line" ]; then log "$name: no release found"; note "$name: no release found"; return 0; fi
   size=${line%% *}; url=${line#* }; zip=${url##*/}
   have=$(cat "$pak/RELEASE.txt" 2>/dev/null)
-  if [ "$have" = "$zip" ]; then log "$name: up to date ($zip)"; note "$name: up to date ($(build_of "$zip"))"; return 0; fi
+  if [ "$have" = "$zip" ]; then log "$name: up to date ($zip)"; note "$name: up to date, $(label "$pak" "$zip")"; return 0; fi
   log "$name: ${have:-unknown build} -> $zip"
   if ! download "$url" "$WORK/$zip" "$size" "Updating $name"; then
     log "$name: download failed"; note "$name: download failed"; return 0
@@ -155,7 +159,7 @@ update_pak() {   # <pak name> <zip name prefix>
   if mv "$pak" "$pak.old" && mv "$new" "$pak"; then
     rm -rf "$pak.old"
     chmod 755 "$pak/launch.sh" "$pak/pokedaisy-linux" 2>/dev/null
-    log "$name: updated to $zip"; note "$name: updated to $(build_of "$zip")"
+    log "$name: updated to $zip"; note "$name: updated to $(label "$pak" "$zip")"
   else
     log "$name: could not swap in the new pak; keeping the old one"; note "$name: update failed"
     [ -d "$pak" ] || mv "$pak.old" "$pak"
