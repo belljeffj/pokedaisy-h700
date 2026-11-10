@@ -83,3 +83,14 @@ to be public (the device has no GitHub credentials).
 
 Read `PokeDaisy.txt` in NextUI's logs folder (or in the pak if no logs folder is set). The
 release notes and `DEPENDENCIES.txt` list the libraries and glibc version the binary needs.
+
+## Main-menu entry (optional)
+
+To show PokeDaisy in NextUI's main menu instead of only under Tools, copy the two folders in
+`pak/main-menu/` to the root of the SD card:
+
+- `Emus/h700/PKDAISY.pak/launch.sh` hands off to `Tools/h700/PokeDaisy.pak`, so the updater
+  keeps it current and it never needs updating itself.
+- `Roms/PokeDaisy (PKDAISY)/Open PokeDaisy.pkd` is a placeholder so NextUI shows the folder.
+
+Main menu → PokeDaisy → Open PokeDaisy opens PokeDaisy's own game list.
