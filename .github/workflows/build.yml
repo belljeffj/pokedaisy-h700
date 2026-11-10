@@ -201,9 +201,12 @@ jobs:
           echo "$name" > "$RUNNER_TEMP/sd/Tools/h700/$PAK.pak/RELEASE.txt"
           # The updater travels in every zip, so it updates itself along with the paks.
           upd="$RUNNER_TEMP/sd/Tools/h700/PokeDaisy Updater.pak"
-          mkdir -p "$upd" && cp pak/updater/launch.sh "$upd/launch.sh" && chmod 755 "$upd/launch.sh"
+          mkdir -p "$upd" && cp -R pak/updater/. "$upd/" && chmod 755 "$upd/launch.sh" "$upd/bin/h700/minui-presenter"
+          # The main-menu shortcut (Emus + Roms placeholders) travels too; the updater refreshes it if installed.
+          cp -R pak/main-menu/Emus pak/main-menu/Roms "$RUNNER_TEMP/sd/"
+          chmod 755 "$RUNNER_TEMP/sd/Emus/h700/PKDAISY.pak/launch.sh"
           zip="$RUNNER_TEMP/$name"
-          (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools)
+          (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools Emus Roms)
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
       - name: Publish release

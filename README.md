@@ -86,11 +86,16 @@ release notes and `DEPENDENCIES.txt` list the libraries and glibc version the bi
 
 ## Main-menu entry (optional)
 
-To show PokeDaisy in NextUI's main menu instead of only under Tools, copy the two folders in
-`pak/main-menu/` to the root of the SD card:
+To show PokeDaisy in NextUI's main menu as well as under Tools, copy the two folders in `pak/main-menu/`
+(also included in every release zip) to the root of the SD card:
 
-- `Emus/h700/PKDAISY.pak/launch.sh` hands off to `Tools/h700/PokeDaisy.pak`, so the updater
-  keeps it current and it never needs updating itself.
-- `Roms/PokeDaisy (PKDAISY)/Open PokeDaisy.pkd` is a placeholder so NextUI shows the folder.
+- `Roms/PokeDaisy (PKDAISY)/` holds one placeholder per version, `PokeDaisy.pkd` and
+  `PokeDaisy 1-Screen.pkd`, so main menu → PokeDaisy asks which version to open.
+- `Emus/h700/PKDAISY.pak/launch.sh` opens the matching pak in `Tools/h700`.
 
-Main menu → PokeDaisy → Open PokeDaisy opens PokeDaisy's own game list.
+Once installed, the PokeDaisy Updater keeps the shortcut current along with the paks.
+
+## Updater screen
+
+The updater shows its progress on screen (checking, a download percentage, installing, then a summary
+that waits for A) using minui-presenter by Jose Diaz-Gonzalez (MIT; `pak/updater/bin/`).
