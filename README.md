@@ -16,11 +16,14 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
   (mGBA + the experimental DSperate backend). If the DS build ever fails, that week's release falls
   back to a GBA-only build and says so in its notes.
 - `pak/launch.sh` replaces upstream's TrimUI launcher:
-  - lists the Pokemon games from NextUI's own `Roms/Game Boy*` and `Roms/Nintendo DS*` folders in
-    one list, like the Android library: each ROM's header game code decides (hacks keep their base
-    game's code). Symlinks in /tmp are mounted onto `PokeDaisy/roms` while PokeDaisy runs.
+  - lists only the games on PokeDaisy's compatibility list (https://pokedaisy.com/compatibility/),
+    checked like the site's ROM check: SHA-1 for Game Boy builds and ROM hacks, cart code + revision
+    for retail GBA and DS. The list is `compat.txt`, made by `tools/make_compat.py` from upstream's
+    `website/src/data/compat.json` at every build, so newly supported games and hack versions arrive
+    with the weekly release. Games come from NextUI's `Roms/Game Boy*` and `Roms/Nintendo DS*`
+    folders, via symlinks in /tmp mounted onto `PokeDaisy/roms` while PokeDaisy runs.
     `POKEDAISY_ALL=1` in `launch.sh` lists every game instead;
-  - handles zipped games: a Pokemon game's `.zip` is unpacked once into `PokeDaisy/.unzipped/`
+  - handles zipped games: a supported game's `.zip` is unpacked once into `PokeDaisy/.unzipped/`
     (again only when the zip changes; safe to delete). `.7z` is not supported;
   - keeps PokeDaisy's saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
     updates never overwrite them;
