@@ -2,9 +2,10 @@
 # PokeDaisy as a NextUI Tools pak on Anbernic H700 (RG SP etc.), NextUI-H700 rc11 or later.
 # POSIX sh only: /bin/sh may be dash on H700.
 #
-# Games stay in NextUI's own GBA folder (ROMS below). PokeDaisy's own files live OUTSIDE the
+# Games stay in NextUI's own Roms folder: the first Roms/ subfolder matching the pattern in
+# roms-folder.txt (GBA pak: "Game Boy Advance*", DS pak: "Nintendo DS*"). PokeDaisy's own files live OUTSIDE the
 # pak, in $SDCARD_PATH/PokeDaisy/, so replacing the pak with a newer build never touches them:
-#   PokeDaisy/saves/   battery saves (<full ROM filename>.sav, e.g. Emerald.gba.sav)
+#   PokeDaisy/saves/   battery saves (<full ROM filename>.sav, e.g. Emerald.gba.sav, Platinum.nds.sav)
 #   PokeDaisy/states/  save states
 #   PokeDaisy/roms/    empty: while PokeDaisy runs, ROMS is bind-mounted here
 #                      (PokeDaisy only lists games from <data>/roms)
@@ -12,7 +13,17 @@ set -eu
 PAK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SD="${SDCARD_PATH:-/mnt/SDCARD}"
 DATA="$SD/PokeDaisy"
-ROMS="${POKEDAISY_ROMS:-$SD/Roms/Game Boy Advance (MGBA)}"
+PATTERN=$(head -n 1 "$PAK_DIR/roms-folder.txt" 2>/dev/null || echo 'Game Boy Advance*')
+ROMS="${POKEDAISY_ROMS:-}"
+if [ -z "$ROMS" ]; then
+  oldifs=$IFS; IFS='
+'
+  for d in "$SD"/Roms/$PATTERN; do
+    if [ -d "$d" ]; then ROMS=$d; break; fi
+  done
+  IFS=$oldifs
+fi
+ROMS="${ROMS:-$SD/Roms/$PATTERN}"
 mkdir -p "$DATA/roms" "$DATA/saves" "$DATA/states"
 
 LOG_DIR="${LOGS_PATH:-$PAK_DIR}"
@@ -30,7 +41,7 @@ export POCKET_RAW_TRIMUI=0
 cd "$PAK_DIR"
 echo "=== $(date) PokeDaisy $(sed -n 's/^Commit: //p' SOURCE.txt 2>/dev/null) PLATFORM=${PLATFORM:-?} DEVICE=${DEVICE:-?}" >> "$LOG"
 
-# Show NextUI's GBA folder as PokeDaisy/roms for this session only.
+# Show NextUI's games folder as PokeDaisy/roms for this session only.
 is_mounted() { grep -qs " $DATA/roms " /proc/mounts; }
 mounted=0
 if is_mounted; then
