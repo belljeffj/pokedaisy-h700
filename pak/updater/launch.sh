@@ -5,7 +5,7 @@
 #   Tools/h700/PokeDaisy.pak           <- newest stable release        (PokeDaisy-h700-<commit>-b<build>.zip)
 #   Tools/h700/PokeDaisy 1-Screen.pak  <- newest one-screen pre-release (PokeDaisy-one-screen-h700-...zip)
 #   Emus/h700/PKDAISY.pak + Roms/PokeDaisy (PKDAISY)  <- the main-menu shortcut, if you installed it
-#   Tools/h700/PokeDaisy Updater.pak   <- itself, from the same zip, last
+#   Tools/h700/PokeDaisy Updater.pak   <- itself, first, from pak/updater on the repo's main branch
 #
 # A pak is only replaced when a newer build exists (each pak's RELEASE.txt names the zip it came from), and
 # only after the download unpacked cleanly; the old pak is kept until the new one is in place. Games, saves
@@ -29,9 +29,14 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 PRESENTER="$PAK_DIR/bin/$PLAT/minui-presenter"
 [ -f "$PRESENTER" ] && chmod 755 "$PRESENTER" 2>/dev/null
 UI_PID=""
-ui_clear() {   # by PID and by name, as other NextUI paks do: a message left up would cover the next one
-  if [ -n "$UI_PID" ]; then kill "$UI_PID" 2>/dev/null; wait "$UI_PID" 2>/dev/null; UI_PID=""; fi
-  killall minui-presenter > /dev/null 2>&1 || true
+ui_clear() {   # minui-presenter can ignore SIGTERM: ask, wait up to 2 s, then force it (never block on it)
+  if [ -n "$UI_PID" ]; then
+    kill "$UI_PID" 2>/dev/null
+    for _i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$UI_PID" 2>/dev/null || break; sleep 0.2; done
+    kill -9 "$UI_PID" 2>/dev/null
+    UI_PID=""
+  fi
+  killall -9 minui-presenter > /dev/null 2>&1 || true
 }
 show() {     # <message>: stays up while work continues
   ui_clear
@@ -43,7 +48,6 @@ finish() {   # <message>: waits for A, then the updater exits
   ui_clear
   [ -x "$PRESENTER" ] || return 0
   "$PRESENTER" --message "$1" --timeout 0 --confirm-show --confirm-text "OK" > /dev/null 2>&1
-  killall minui-presenter > /dev/null 2>&1 || true
 }
 trap 'ui_clear' EXIT
 bar() {      # <percent> -> [#####-----] 50%
@@ -54,10 +58,10 @@ bar() {      # <percent> -> [#####-----] 50%
 
 fetch() {   # <url> <file>
   if command -v curl > /dev/null 2>&1; then
-    curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1" 2>> "$LOG" && return 0
+    curl -fsSL --retry 2 --connect-timeout 20 --speed-limit 1024 --speed-time 60 --max-time 1800 -o "$2" "$1" 2>> "$LOG" && return 0
   fi
   if command -v wget > /dev/null 2>&1; then
-    wget -q -O "$2" "$1" 2>> "$LOG" && return 0
+    wget -q -T 60 -O "$2" "$1" 2>> "$LOG" && return 0
   fi
   return 1
 }
@@ -78,8 +82,34 @@ download() {   # <url> <file> <expected bytes> <title>: fetch in the background,
   wait "$dl"
 }
 
+# First, update this updater itself from the repo and re-run it, so a fixed updater always takes over before
+# it does anything else (even if this copy has a bug further down). A download only counts if it is complete
+# (ends with the marker line) and parses; the presenter binary is fetched only if it is missing.
+RAW="${POKEDAISY_RAW_URL:-https://raw.githubusercontent.com/$REPO/main/pak/updater}"   # override: testing
+if [ -z "${POKEDAISY_UPDATER_RERUN:-}" ]; then
+  show "PokeDaisy Updater\nChecking for updates..."
+  rm -f "$WORK/self.sh"
+  if fetch "$RAW/launch.sh" "$WORK/self.sh" && tail -n 1 "$WORK/self.sh" | grep -qx '# end of PokeDaisy Updater' \
+     && sh -n "$WORK/self.sh" 2>/dev/null && ! cmp -s "$WORK/self.sh" "$PAK_DIR/launch.sh"; then
+    cp "$WORK/self.sh" "$PAK_DIR/.launch.sh.new" && mv -f "$PAK_DIR/.launch.sh.new" "$PAK_DIR/launch.sh" \
+      && chmod 755 "$PAK_DIR/launch.sh" && log "PokeDaisy Updater: updated itself; running the new one"
+    SELF_UPDATED=1
+  fi
+  if [ ! -f "$PRESENTER" ]; then
+    mkdir -p "$PAK_DIR/bin/$PLAT"
+    fetch "$RAW/bin/h700/minui-presenter" "$PAK_DIR/bin/$PLAT/.minui-presenter.new" \
+      && mv -f "$PAK_DIR/bin/$PLAT/.minui-presenter.new" "$PRESENTER" && chmod 755 "$PRESENTER"
+  fi
+  rm -f "$WORK/self.sh"
+  if [ -n "${SELF_UPDATED:-}" ]; then
+    ui_clear; trap - EXIT
+    POKEDAISY_UPDATER_RERUN=1; export POKEDAISY_UPDATER_RERUN
+    exec sh "$PAK_DIR/launch.sh" "$@"
+  fi
+fi
+
 log "=== checking $REPO"
-show "PokeDaisy Updater\nChecking for updates..."
+[ -n "$UI_PID" ] || show "PokeDaisy Updater\nChecking for updates..."
 rm -rf "$WORK/x" "$WORK/updater" "$WORK/shortcut" "$WORK"/*.zip "$WORK/releases.json" "$WORK/assets.txt" "$WORK/urls.txt" 2>/dev/null
 API="${POKEDAISY_RELEASES_URL:-https://api.github.com/repos/$REPO/releases?per_page=30}"   # override: testing
 if ! fetch "$API" "$WORK/releases.json"; then
@@ -100,6 +130,7 @@ if [ ! -s "$WORK/assets.txt" ]; then
 fi
 
 SUMMARY=""
+[ -n "${POKEDAISY_UPDATER_RERUN:-}" ] && SUMMARY="Updater: updated itself"
 note() { if [ -z "$SUMMARY" ]; then SUMMARY="$1"; else SUMMARY="$SUMMARY\n$1"; fi; }
 build_of() { b=${1##*-b}; echo "b${b%.zip}"; }
 
@@ -132,10 +163,7 @@ update_pak() {   # <pak name> <zip name prefix>
     return 0
   fi
   rm -f "$WORK/$zip"
-  # Keep this zip's updater and main-menu shortcut for the end.
-  if [ -d "$WORK/x/Tools/h700/PokeDaisy Updater.pak" ]; then
-    rm -rf "$WORK/updater"; mv "$WORK/x/Tools/h700/PokeDaisy Updater.pak" "$WORK/updater"
-  fi
+  # Keep this zip's main-menu shortcut for the end.
   if [ -d "$WORK/x/Emus/h700/PKDAISY.pak" ]; then
     rm -rf "$WORK/shortcut"; mkdir -p "$WORK/shortcut"
     mv "$WORK/x/Emus" "$WORK/shortcut/Emus"; [ -d "$WORK/x/Roms" ] && mv "$WORK/x/Roms" "$WORK/shortcut/Roms"
@@ -167,25 +195,9 @@ if [ -d "$EMU" ] && [ -f "$WORK/shortcut/Emus/h700/PKDAISY.pak/launch.sh" ]; the
   if [ -n "$changed" ]; then log "Main-menu shortcut: updated"; note "Main-menu shortcut: updated"; fi
 fi
 
-# Last: a newer updater from a downloaded zip. Each file is written beside the old one and renamed over
-# it, so the copy of this script that is running now is never changed underneath the shell.
-if [ -f "$WORK/updater/launch.sh" ]; then
-  changed=""
-  ( cd "$WORK/updater" && find . -type f ) | while IFS= read -r rel; do
-    rel=${rel#./}; src="$WORK/updater/$rel"; dst="$PAK_DIR/$rel"
-    cmp -s "$src" "$dst" && continue
-    mkdir -p "$(dirname -- "$dst")"
-    cp "$src" "$(dirname -- "$dst")/.${rel##*/}.new" && mv -f "$(dirname -- "$dst")/.${rel##*/}.new" "$dst"
-    echo "$rel" >> "$WORK/updater.changed"
-  done
-  if [ -s "$WORK/updater.changed" ]; then
-    chmod 755 "$PAK_DIR/launch.sh" "$PAK_DIR/bin/$PLAT/minui-presenter" 2>/dev/null
-    log "PokeDaisy Updater: updated itself"; note "Updater: updated itself"
-  fi
-  rm -f "$WORK/updater.changed"
-fi
 rm -rf "$WORK/x" "$WORK/updater" "$WORK/shortcut" "$WORK"/*.zip 2>/dev/null
 sync
 log "=== done"
 finish "PokeDaisy Updater\n\n$SUMMARY"
 exit 0
+# end of PokeDaisy Updater
