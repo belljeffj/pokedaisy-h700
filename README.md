@@ -12,9 +12,12 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
 - It checks upstream `main`. If there is a commit it has not built yet, it builds with upstream's
   own checksum-pinned NextUI/TrimUI toolchain, runs upstream's tests under QEMU, and publishes a
   release named `upstream-<commit>` with a ready-to-unzip `PokeDaisy-h700-<commit>.zip`.
+- One pak plays GBA, GB/GBC and DS games, like the Android app: it is upstream's DS-enabled build
+  (mGBA + the experimental DSperate backend). If the DS build ever fails, that week's release falls
+  back to a GBA-only build and says so in its notes.
 - `pak/launch.sh` replaces upstream's TrimUI launcher:
-  - lists games from NextUI's own `Roms/Game Boy Advance (MGBA)` folder (bind-mounted onto
-    `PokeDaisy/roms` while PokeDaisy runs; set `POKEDAISY_ROMS` to change it);
+  - lists games from NextUI's own `Roms/Game Boy Advance*` and `Roms/Nintendo DS*` folders in one
+    list (symlinks in /tmp, mounted onto `PokeDaisy/roms` while PokeDaisy runs);
   - keeps PokeDaisy's saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
     updates never overwrite them;
   - turns off the TrimUI raw-button layout (NextUI-H700 rc11+ exposes the built-in controls as a
@@ -26,9 +29,11 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
 1. Back up `PokeDaisy/saves` on the card.
 2. Download the latest release zip and unzip it at the root of the NextUI SD card, replacing
    `Tools/h700/PokeDaisy.pak`.
-3. Keep games in `Roms/Game Boy Advance (MGBA)/`. To use an existing save, copy it to
-   `PokeDaisy/saves/<full ROM filename>.sav`, e.g. `Emerald.gba.sav` (PokeDaisy does not import
-   saves on its own). Leave `PokeDaisy/roms/` empty.
+3. Keep games in `Roms/Game Boy Advance (MGBA)/` and `Roms/Nintendo DS (NDS)/`. To use an existing
+   save, copy it to `PokeDaisy/saves/<full ROM filename>.sav`, e.g. `Emerald.gba.sav` or
+   `Platinum.nds.sav` (PokeDaisy does not import saves on its own). Leave `PokeDaisy/roms/` empty.
+4. DS is experimental upstream: the companion supports only Pokemon Platinum (USA) rev 1; other DS
+   games are emulation only.
 
 ## If it does not start
 
