@@ -70,7 +70,9 @@ fi
 #     (hacks built on these keep the base game's code)
 #   DS (game code at 0x0C): Diamond ADA, Pearl APA, Platinum CPU, HeartGold IPK, SoulSilver IPG,
 #     Black IRB, White IRA, Black 2 IRE, White 2 IRD
-#   GB/GBC (title at 0x134): POKEMON ..., PM_CRYSTAL
+#   GB/GBC (title at 0x134): POKEMON RED/BLUE/GREEN/YELLOW, POKEMON_GLD/_SLV, PM_CRYSTAL
+#   (main-series games only, like the companion: spin-offs such as Pinball, Puzzle Challenge,
+#   Trading Card Game and Mystery Dungeon are left out)
 # POKEDAISY_ALL=1 lists every game; without dd nothing is hidden.
 header() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | tr -d '\000'; }
 is_pokemon() {
@@ -82,7 +84,7 @@ is_pokemon() {
     *.nds|*.NDS)
       case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac ;;
     *)
-      case "$(header "$1" 308 16)" in POKEMON*|PM_CRYSTAL*|*POKEMON*) return 0 ;; esac ;;
+      case "$(header "$1" 308 16)" in 'POKEMON RED'*|'POKEMON BLUE'*|'POKEMON GREEN'*|'POKEMON YELLOW'*|POKEMON_GLD*|POKEMON_SLV*|PM_CRYSTAL*) return 0 ;; esac ;;
   esac
   return 1
 }
@@ -91,7 +93,7 @@ is_pokemon_head() {
   [ "${POKEDAISY_ALL:-0}" = 1 ] && return 0
   case "$(header "$1" 172 3)" in AXV|AXP|BPE|BPR|BPG) return 0 ;; esac
   case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac
-  case "$(header "$1" 308 16)" in POKEMON*|PM_CRYSTAL*|*POKEMON*) return 0 ;; esac
+  case "$(header "$1" 308 16)" in 'POKEMON RED'*|'POKEMON BLUE'*|'POKEMON GREEN'*|'POKEMON YELLOW'*|POKEMON_GLD*|POKEMON_SLV*|PM_CRYSTAL*) return 0 ;; esac
   return 1
 }
 # Zipped games: PokeDaisy reads only unpacked ROMs, so a Pokemon game's zip is unpacked once into
