@@ -16,8 +16,12 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
   (mGBA + the experimental DSperate backend). If the DS build ever fails, that week's release falls
   back to a GBA-only build and says so in its notes.
 - `pak/launch.sh` replaces upstream's TrimUI launcher:
-  - lists games from NextUI's own `Roms/Game Boy Advance*` and `Roms/Nintendo DS*` folders in one
-    list (symlinks in /tmp, mounted onto `PokeDaisy/roms` while PokeDaisy runs);
+  - lists the Pokemon games from NextUI's own `Roms/Game Boy*` and `Roms/Nintendo DS*` folders in
+    one list, like the Android library: each ROM's header game code decides (hacks keep their base
+    game's code). Symlinks in /tmp are mounted onto `PokeDaisy/roms` while PokeDaisy runs.
+    `POKEDAISY_ALL=1` in `launch.sh` lists every game instead;
+  - handles zipped games: a Pokemon game's `.zip` is unpacked once into `PokeDaisy/.unzipped/`
+    (again only when the zip changes; safe to delete). `.7z` is not supported;
   - keeps PokeDaisy's saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
     updates never overwrite them;
   - turns off the TrimUI raw-button layout (NextUI-H700 rc11+ exposes the built-in controls as a
@@ -29,7 +33,7 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
 1. Back up `PokeDaisy/saves` on the card.
 2. Download the latest release zip and unzip it at the root of the NextUI SD card, replacing
    `Tools/h700/PokeDaisy.pak`.
-3. Keep games in `Roms/Game Boy Advance (MGBA)/` and `Roms/Nintendo DS (NDS)/`. To use an existing
+3. Keep games in NextUI's `Roms/Game Boy …` and `Roms/Nintendo DS (NDS)/` folders. To use an existing
    save, copy it to `PokeDaisy/saves/<full ROM filename>.sav`, e.g. `Emerald.gba.sav` or
    `Platinum.nds.sav` (PokeDaisy does not import saves on its own). Leave `PokeDaisy/roms/` empty.
 4. DS is experimental upstream: the companion supports only Pokemon Platinum (USA) rev 1; other DS
