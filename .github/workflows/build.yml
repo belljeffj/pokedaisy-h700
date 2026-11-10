@@ -65,7 +65,7 @@ jobs:
         if: steps.up.outputs.skip == 'false'
         working-directory: upstream
         run: |
-          git submodule update --init third_party/mgba
+          git submodule update --init third_party/mgba third_party/dsperate
           sudo apt-get update && sudo apt-get install -y cmake qemu-user-static
           python3 linux/setup_trimui_sdk.py "$RUNNER_TEMP/trimui-sdk"
           echo "NEXTUI_TOOLCHAIN=$RUNNER_TEMP/trimui-sdk/cross/x86_64-aarch64-nextui-linux-gnu" >> "$GITHUB_ENV"
@@ -80,29 +80,60 @@ jobs:
           cmake --build linux/build-arm -j2
           ctest --test-dir linux/build-arm --output-on-failure
 
-      - name: Assemble Tools/h700/PokeDaisy.pak
+      - name: Build and test the experimental DS (DSperate) host under QEMU
+        id: ds
+        if: steps.up.outputs.skip == 'false'
+        continue-on-error: true   # a DS failure must not block the GBA release
+        working-directory: upstream
+        run: |
+          # libstdc++/libgcc linked in, so the device's C++ runtime version does not matter.
+          cmake -S linux -B linux/build-ds-arm -DCMAKE_TOOLCHAIN_FILE=trimui-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_LTO=OFF -DPOCKET_DSPERATE=ON \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="qemu-aarch64-static;-L;$NEXTUI_TOOLCHAIN/aarch64-nextui-linux-gnu/libc"
+          cmake --build linux/build-ds-arm -j2
+          ctest --test-dir linux/build-ds-arm --output-on-failure
+
+      - name: Assemble Tools/h700 paks
         if: steps.up.outputs.skip == 'false'
         id: pak
+        env:
+          DS_OK: ${{ steps.ds.outcome == 'success' }}
+          SHORT: ${{ steps.up.outputs.short }}
         run: |
           set -eu
           out="$RUNNER_TEMP/out"
-          python3 upstream/linux/package.py upstream/linux/build-arm/pokedaisy-linux "$out"
-          pak="$RUNNER_TEMP/sd/Tools/h700/PokeDaisy.pak"
-          mkdir -p "$pak"
-          cp -a "$out/pokedaisy-linux-aarch64/." "$pak/"
-          rm -f "$pak/config.json"            # TrimUI Apps entry; not used by NextUI
-          cp pak/launch.sh "$pak/launch.sh"   # H700 launcher: data outside the pak, raw TrimUI input off
-          chmod 755 "$pak/launch.sh" "$pak/pokedaisy-linux"
-          # Record what the binary needs from the device, for debugging launch failures.
           objdump=$NEXTUI_TOOLCHAIN/bin/aarch64-nextui-linux-gnu-objdump
-          { echo "Needed libraries:"; $objdump -p "$pak/pokedaisy-linux" | sed -n 's/^ *NEEDED */  /p'
-            echo "Highest glibc symbol version:"
-            $objdump -T "$pak/pokedaisy-linux" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | sed 's/^/  /'
-          } > "$pak/DEPENDENCIES.txt"
-          cat "$pak/DEPENDENCIES.txt"
-          zip="$RUNNER_TEMP/PokeDaisy-h700-${{ steps.up.outputs.short }}.zip"
+          # make_pak <packaged folder> <sd staging dir> <pak name> <Roms subfolder pattern>
+          make_pak() {
+            pak="$2/Tools/h700/$3.pak"
+            mkdir -p "$pak"
+            cp -a "$1/." "$pak/"
+            rm -f "$pak/config.json"            # TrimUI Apps entry; not used by NextUI
+            cp pak/launch.sh "$pak/launch.sh"   # H700 launcher: data outside the pak, raw TrimUI input off
+            printf '%s\n' "$4" > "$pak/roms-folder.txt"
+            chmod 755 "$pak/launch.sh" "$pak/pokedaisy-linux"
+            # Record what the binary needs from the device, for debugging launch failures.
+            { echo "$3 needs these libraries:"; $objdump -p "$pak/pokedaisy-linux" | sed -n 's/^ *NEEDED */  /p'
+              echo "Highest glibc symbol version:"
+              $objdump -T "$pak/pokedaisy-linux" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | sed 's/^/  /'
+            } > "$pak/DEPENDENCIES.txt"
+            cat "$pak/DEPENDENCIES.txt" | tee -a "$RUNNER_TEMP/deps.txt"
+          }
+          python3 upstream/linux/package.py upstream/linux/build-arm/pokedaisy-linux "$out"
+          make_pak "$out/pokedaisy-linux-aarch64" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy Advance*'
+          zip="$RUNNER_TEMP/PokeDaisy-h700-$SHORT.zip"
           (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools)
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          if [ "$DS_OK" = true ]; then
+            python3 upstream/linux/package.py --dsperate upstream/linux/build-ds-arm/pokedaisy-linux "$out"
+            make_pak "$out/pokedaisy-linux-aarch64-ds-experiment" "$RUNNER_TEMP/sd-ds" 'PokeDaisy DS' 'Nintendo DS*'
+            dszip="$RUNNER_TEMP/PokeDaisy-DS-h700-$SHORT.zip"
+            (cd "$RUNNER_TEMP/sd-ds" && zip -r -X "$dszip" Tools)
+            echo "dszip=$dszip" >> "$GITHUB_OUTPUT"
+          else
+            echo "DS build failed; releasing the GBA pak only." | tee -a "$RUNNER_TEMP/deps.txt"
+          fi
 
       - name: Publish release
         if: steps.up.outputs.skip == 'false'
@@ -110,6 +141,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.up.outputs.tag }}
           SHA: ${{ steps.up.outputs.sha }}
+          ZIP: ${{ steps.pak.outputs.zip }}
+          DSZIP: ${{ steps.pak.outputs.dszip }}
         run: |
           set -eu
           date=$(git -C upstream log -1 --format=%cs)
@@ -122,14 +155,19 @@ jobs:
               echo "Changes since the last build: $UPSTREAM/compare/${prev#upstream-}...$SHA"
               echo
             fi
-            echo "**Install / update:** unzip at the root of your NextUI SD card and let it replace"
-            echo "\`Tools/h700/PokeDaisy.pak\`. Games, saves and states live in \`PokeDaisy/\` on the card"
-            echo "and are not touched. Back up \`PokeDaisy/saves\` first anyway."
+            echo "**Install / update:** copy \`PokeDaisy.pak\` (and, for DS, \`PokeDaisy DS.pak\`) from the"
+            echo "zip's \`Tools/h700/\` into the card's \`Tools/h700/\`, replacing the old one. Saves and states"
+            echo "live in \`PokeDaisy/\` on the card and are not touched. Back up \`PokeDaisy/saves\` first anyway."
+            echo
+            echo "**DS is experimental:** companion only for Pokemon Platinum (USA) rev 1; other DS games are"
+            echo "emulation only. Not yet tested on H700 hardware."
             echo
             echo '```'
-            cat "$RUNNER_TEMP/sd/Tools/h700/PokeDaisy.pak/DEPENDENCIES.txt"
+            cat "$RUNNER_TEMP/deps.txt"
             echo '```'
           } > notes.md
+          set -- "$ZIP"
+          [ -n "$DSZIP" ] && set -- "$@" "$DSZIP"
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" "${{ steps.pak.outputs.zip }}" \
+          gh release create "$TAG" "$@" \
             --title "PokeDaisy H700 $(printf %.7s "$SHA") ($date)" --notes-file notes.md --latest
