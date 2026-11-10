@@ -36,6 +36,15 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
     standard SDL controller);
   - logs to NextUI's logs folder as `PokeDaisy.txt`.
 
+## DS battle screen switching
+
+`tools/patch_ds_battles.py` runs before every DS build. Upstream's Linux DS frontend only detects battles
+for the one Platinum dump its companion reads; the patch turns on AUTO switching (and PANEL in the
+one-screen build) for every game in PokeDaisy's shared DS field table, as the Android app does:
+Platinum, HeartGold / SoulSilver, Black / White, Black 2 / White 2. For those other games it only reads
+game memory. The companion itself stays Platinum-only. If upstream changes that code, the build goes on
+without the patch and the release notes say so.
+
 ## Release lines
 
 - **Stable** (`PokeDaisy.pak`, tags `upstream-<commit>`): lidor30/pokedaisy `main`.
