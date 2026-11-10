@@ -6,6 +6,10 @@ name: Build PokeDaisy pak for NextUI H700
 #               -> "PokeDaisy 1-Screen.pak", a pre-release beside the stable pak (tags onescreen-<commit>)
 
 on:
+  # A change to the launcher, the tools or this workflow rebuilds both lines straight away.
+  push:
+    branches: [main]
+    paths: ['pak/**', 'tools/**', '.github/workflows/build.yml']
   schedule:
     # Mondays 13:23 UTC (morning US Eastern).
     - cron: '23 13 * * 1'
@@ -60,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REF: ${{ matrix.line == 'stable' && inputs.ref || matrix.ref }}
-          FORCE: ${{ inputs.force || false }}
+          FORCE: ${{ inputs.force || github.event_name == 'push' }}
           WANT: ${{ inputs.line || 'both' }}
         run: |
           set -eu
