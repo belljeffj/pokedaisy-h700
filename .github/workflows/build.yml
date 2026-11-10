@@ -1,67 +1,95 @@
 name: Build PokeDaisy pak for NextUI H700
 
+# Two release lines, each built only when its source branch has a commit it hasn't built yet:
+#   stable      lidor30/pokedaisy main -> PokeDaisy.pak                      (tags upstream-<commit>)
+#   one-screen  keeganwhitacre/pokedaisy-brick experiment/ds-one-screen-battles
+#               -> "PokeDaisy 1-Screen.pak", a pre-release beside the stable pak (tags onescreen-<commit>)
+
 on:
   schedule:
-    # Mondays 13:23 UTC (morning US Eastern). Builds only when upstream main has a new commit.
+    # Mondays 13:23 UTC (morning US Eastern).
     - cron: '23 13 * * 1'
   workflow_dispatch:
     inputs:
       ref:
-        description: Upstream branch, tag or commit to build (default main)
+        description: Stable line only - upstream branch, tag or commit to build (default main)
         default: main
       force:
         description: Rebuild even if a release for this commit already exists
         type: boolean
         default: false
+      line:
+        description: Which release line to build
+        type: choice
+        options: [both, stable, one-screen]
+        default: both
 
 permissions:
   contents: write
 
-concurrency:
-  group: pokedaisy-h700
-  cancel-in-progress: false
-
-env:
-  UPSTREAM: https://github.com/lidor30/pokedaisy
-
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1   # one at a time: both publish releases
+      matrix:
+        include:
+          - line: stable
+            repo: lidor30/pokedaisy
+            ref: main
+            pak: PokeDaisy
+            prefix: upstream
+            title: PokeDaisy H700
+            ds_required: false
+          - line: one-screen
+            repo: keeganwhitacre/pokedaisy-brick
+            ref: experiment/ds-one-screen-battles
+            pak: PokeDaisy 1-Screen
+            prefix: onescreen
+            title: PokeDaisy 1-Screen H700 (experimental)
+            ds_required: true
+    env:
+      UPSTREAM: https://github.com/${{ matrix.repo }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Find upstream commit
+      - name: Find source commit
         id: up
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ inputs.ref || 'main' }}
+          REF: ${{ matrix.line == 'stable' && inputs.ref || matrix.ref }}
           FORCE: ${{ inputs.force || false }}
+          WANT: ${{ inputs.line || 'both' }}
         run: |
           set -eu
+          if [ "$WANT" != both ] && [ "$WANT" != "${{ matrix.line }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           sha=$(git ls-remote "$UPSTREAM" "refs/heads/$REF" "refs/tags/$REF" | head -1 | cut -f1)
           [ -n "$sha" ] || sha="$REF"   # a raw commit id
           short=$(printf %.7s "$sha")
-          tag="upstream-$short"
-          echo "sha=$sha"   >> "$GITHUB_OUTPUT"
+          tag="${{ matrix.prefix }}-$short"
+          echo "sha=$sha"     >> "$GITHUB_OUTPUT"
           echo "short=$short" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag"   >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"     >> "$GITHUB_OUTPUT"
           if gh release view "$tag" >/dev/null 2>&1 && [ "$FORCE" != true ]; then
-            echo "Release $tag already exists; nothing new upstream."
+            echo "Release $tag already exists; nothing new."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check out upstream PokeDaisy
+      - name: Check out source
         if: steps.up.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
-          repository: lidor30/pokedaisy
+          repository: ${{ matrix.repo }}
           ref: ${{ steps.up.outputs.sha }}
           path: upstream
 
-      - name: Toolchain (checksum-pinned, from upstream's own script)
+      - name: Toolchain (checksum-pinned, from the source's own script)
         if: steps.up.outputs.skip == 'false'
         working-directory: upstream
         run: |
@@ -71,7 +99,7 @@ jobs:
           echo "NEXTUI_TOOLCHAIN=$RUNNER_TEMP/trimui-sdk/cross/x86_64-aarch64-nextui-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Build and test AArch64 under QEMU
-        if: steps.up.outputs.skip == 'false'
+        if: steps.up.outputs.skip == 'false' && !matrix.ds_required
         working-directory: upstream
         run: |
           cmake -S linux -B linux/build-arm -DCMAKE_TOOLCHAIN_FILE=trimui-toolchain.cmake \
@@ -83,7 +111,8 @@ jobs:
       - name: Build and test the DS-enabled (DSperate) host under QEMU
         id: ds
         if: steps.up.outputs.skip == 'false'
-        continue-on-error: true   # if DS fails, release the GBA-only build instead
+        # Stable: if DS fails, release the GBA-only build instead. One-screen: DS is the point, so fail.
+        continue-on-error: ${{ !matrix.ds_required }}
         working-directory: upstream
         run: |
           # libstdc++/libgcc linked in, so the device's C++ runtime version does not matter.
@@ -94,16 +123,28 @@ jobs:
           cmake --build linux/build-ds-arm -j2
           ctest --test-dir linux/build-ds-arm --output-on-failure
 
-      - name: Assemble Tools/h700 paks
+      - name: Assemble the Tools/h700 pak
         if: steps.up.outputs.skip == 'false'
         id: pak
         env:
           DS_OK: ${{ steps.ds.outcome == 'success' }}
           SHORT: ${{ steps.up.outputs.short }}
+          PAK: ${{ matrix.pak }}
+          LINE: ${{ matrix.line }}
         run: |
           set -eu
           out="$RUNNER_TEMP/out"
+          : > "$RUNNER_TEMP/deps.txt"
           objdump=$NEXTUI_TOOLCHAIN/bin/aarch64-nextui-linux-gnu-objdump
+          # The compatibility list (pokedaisy.com/compatibility) from this commit's own data, so new games and
+          # hack versions reach the pak with each build. Without it the launcher lists every game.
+          if [ -f upstream/website/src/data/compat.json ]; then
+            python3 tools/make_compat.py upstream/website/src/data/compat.json "$RUNNER_TEMP/compat.txt"
+            echo "Compatibility list: $(grep -c '' "$RUNNER_TEMP/compat.txt") entries" | tee -a "$RUNNER_TEMP/deps.txt"
+          else
+            : > "$RUNNER_TEMP/compat.txt"
+            echo "WARNING: no website/src/data/compat.json in the source; this pak lists every game" | tee -a "$RUNNER_TEMP/deps.txt"
+          fi
           # make_pak <packaged folder> <sd staging dir> <pak name> <Roms subfolder pattern>...
           make_pak() {
             src=$1 sd=$2 name=$3; shift 3
@@ -112,7 +153,7 @@ jobs:
             cp -a "$src/." "$pak/"
             rm -f "$pak/config.json"            # TrimUI Apps entry; not used by NextUI
             cp pak/launch.sh "$pak/launch.sh"   # H700 launcher: data outside the pak, raw TrimUI input off
-            cp "$RUNNER_TEMP/compat.txt" "$pak/compat.txt"   # supported games, from this upstream commit
+            cp "$RUNNER_TEMP/compat.txt" "$pak/compat.txt"
             printf '%s\n' "$@" > "$pak/roms-folder.txt"
             chmod 755 "$pak/launch.sh" "$pak/pokedaisy-linux"
             # Record what the binary needs from the device, for debugging launch failures.
@@ -124,25 +165,17 @@ jobs:
           }
           # One pak, like the Android app: the DS build (mGBA + DSperate) lists GBA and DS games together.
           if [ "$DS_OK" = true ]; then
-            # The compatibility list (pokedaisy.com/compatibility) from this commit's own data, so new games and
-          # hack versions reach the pak with each build. Without it the launcher lists every game.
-          if [ -f upstream/website/src/data/compat.json ]; then
-            python3 tools/make_compat.py upstream/website/src/data/compat.json "$RUNNER_TEMP/compat.txt"
-            echo "Compatibility list: $(grep -c '' "$RUNNER_TEMP/compat.txt") entries" | tee -a "$RUNNER_TEMP/deps.txt"
-          else
-            : > "$RUNNER_TEMP/compat.txt"
-            echo "WARNING: upstream has no website/src/data/compat.json; this pak lists every game" | tee -a "$RUNNER_TEMP/deps.txt"
-          fi
-          python3 upstream/linux/package.py --dsperate upstream/linux/build-ds-arm/pokedaisy-linux "$out"
-            make_pak "$out/pokedaisy-linux-aarch64-ds-experiment" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy*' 'Nintendo DS*'
+            python3 upstream/linux/package.py --dsperate upstream/linux/build-ds-arm/pokedaisy-linux "$out"
+            make_pak "$out/pokedaisy-linux-aarch64-ds-experiment" "$RUNNER_TEMP/sd" "$PAK" 'Game Boy*' 'Nintendo DS*'
             echo "kind=GBA + DS" >> "$GITHUB_OUTPUT"
           else
             python3 upstream/linux/package.py upstream/linux/build-arm/pokedaisy-linux "$out"
-            make_pak "$out/pokedaisy-linux-aarch64" "$RUNNER_TEMP/sd" PokeDaisy 'Game Boy*'
+            make_pak "$out/pokedaisy-linux-aarch64" "$RUNNER_TEMP/sd" "$PAK" 'Game Boy*'
             echo "DS build failed this time; this release is GBA only." | tee -a "$RUNNER_TEMP/deps.txt"
             echo "kind=GBA only" >> "$GITHUB_OUTPUT"
           fi
-          zip="$RUNNER_TEMP/PokeDaisy-h700-$SHORT.zip"
+          base=PokeDaisy-h700; [ "$LINE" = stable ] || base="PokeDaisy-$LINE-h700"
+          zip="$RUNNER_TEMP/$base-$SHORT.zip"
           (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools)
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
@@ -154,31 +187,47 @@ jobs:
           SHA: ${{ steps.up.outputs.sha }}
           ZIP: ${{ steps.pak.outputs.zip }}
           KIND: ${{ steps.pak.outputs.kind }}
+          PREFIX: ${{ matrix.prefix }}
+          TITLE: ${{ matrix.title }}
+          PAK: ${{ matrix.pak }}
+          LINE: ${{ matrix.line }}
+          BRANCH: ${{ matrix.ref }}
         run: |
           set -eu
           date=$(git -C upstream log -1 --format=%cs)
           subject=$(git -C upstream log -1 --format=%s)
-          prev=$(gh release list --limit 1 --json tagName -q '.[0].tagName' || true)
+          prev=$(gh release list --limit 50 --json tagName \
+                   -q "[.[] | select(.tagName | startswith(\"$PREFIX-\"))][0].tagName" || true)
           {
-            echo "PokeDaisy upstream commit [\`$(printf %.7s "$SHA")\`]($UPSTREAM/commit/$SHA) ($date): $subject"
+            echo "Source: [$UPSTREAM]($UPSTREAM) \`$BRANCH\` at [\`$(printf %.7s "$SHA")\`]($UPSTREAM/commit/$SHA) ($date): $subject"
             echo
-            if [ -n "$prev" ]; then
-              echo "Changes since the last build: $UPSTREAM/compare/${prev#upstream-}...$SHA"
+            if [ -n "$prev" ] && [ "$prev" != "$TAG" ]; then
+              echo "Changes since the last build: $UPSTREAM/compare/${prev#$PREFIX-}...$SHA"
               echo
             fi
             echo "**This build: $KIND.**"
             echo
-            echo "**Install / update:** copy \`PokeDaisy.pak\` from the zip's \`Tools/h700/\` into the card's"
+            echo "**Install / update:** copy \`$PAK.pak\` from the zip's \`Tools/h700/\` into the card's"
             echo "\`Tools/h700/\`, replacing the old one. Saves and states live in \`PokeDaisy/\` on the card and"
             echo "are not touched. Back up \`PokeDaisy/saves\` first anyway."
             echo
-            echo "**DS is experimental:** companion only for Pokemon Platinum (USA) rev 1; other DS games are"
-            echo "emulation only. Not yet tested on H700 hardware."
+            if [ "$LINE" = one-screen ]; then
+              echo "**Experimental:** the Brick fork's one-screen DS battle prototype (SET > BATTLES > PANEL),"
+              echo "built from a branch that can be older than PokeDaisy's main. It installs beside the stable"
+              echo "\`PokeDaisy.pak\` and shares its saves. Battle detection is for Pokemon Platinum (USA) rev 1."
+            else
+              echo "**DS is experimental:** companion only for Pokemon Platinum (USA) rev 1; other DS games are"
+              echo "emulation only."
+            fi
             echo
             echo '```'
             cat "$RUNNER_TEMP/deps.txt"
             echo '```'
           } > notes.md
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" "$ZIP" \
-            --title "PokeDaisy H700 $(printf %.7s "$SHA") ($date)" --notes-file notes.md --latest
+          if [ "$LINE" = stable ]; then
+            gh release create "$TAG" "$ZIP" --title "$TITLE $(printf %.7s "$SHA") ($date)" --notes-file notes.md --latest
+          else
+            gh release create "$TAG" "$ZIP" --title "$TITLE $(printf %.7s "$SHA") ($date)" --notes-file notes.md \
+              --prerelease --latest=false
+          fi
