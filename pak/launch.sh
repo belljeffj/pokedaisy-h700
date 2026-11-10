@@ -2,7 +2,7 @@
 # PokeDaisy as a NextUI Tools pak on Anbernic H700 (RG SP etc.), NextUI-H700 rc11 or later.
 # POSIX sh only: /bin/sh may be dash on H700.
 #
-# Games stay in NextUI's own Roms folders: every Roms/ subfolder matching a line of
+# Games stay in NextUI's own Roms folders: all Roms/ subfolders matching a line of
 # roms-folder.txt ("Game Boy Advance*", "Nintendo DS*"). While PokeDaisy runs, a temporary folder
 # of symlinks to every game in them is mounted as PokeDaisy/roms (PokeDaisy only lists games
 # from <data>/roms). The SD card's FAT/exFAT can't hold symlinks or act as an overlayfs layer,
@@ -25,8 +25,8 @@ if [ -z "$FOLDERS" ]; then
   oldifs=$IFS; IFS=$NL
   for pattern in $patterns; do
     [ -n "$pattern" ] || continue
-    for d in "$SD"/Roms/$pattern; do
-      if [ -d "$d" ]; then FOLDERS="$FOLDERS${FOLDERS:+$NL}$d"; break; fi
+    for d in "$SD"/Roms/$pattern; do   # every match: e.g. both "(GBA)" and "(MGBA)"
+      if [ -d "$d" ]; then FOLDERS="$FOLDERS${FOLDERS:+$NL}$d"; fi
     done
   done
   IFS=$oldifs
