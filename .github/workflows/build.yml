@@ -1,0 +1,135 @@
+name: Build PokeDaisy pak for NextUI H700
+
+on:
+  schedule:
+    # Mondays 13:23 UTC (morning US Eastern). Builds only when upstream main has a new commit.
+    - cron: '23 13 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream branch, tag or commit to build (default main)
+        default: main
+      force:
+        description: Rebuild even if a release for this commit already exists
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pokedaisy-h700
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/lidor30/pokedaisy
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find upstream commit
+        id: up
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref || 'main' }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -eu
+          sha=$(git ls-remote "$UPSTREAM" "refs/heads/$REF" "refs/tags/$REF" | head -1 | cut -f1)
+          [ -n "$sha" ] || sha="$REF"   # a raw commit id
+          short=$(printf %.7s "$sha")
+          tag="upstream-$short"
+          echo "sha=$sha"   >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"   >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1 && [ "$FORCE" != true ]; then
+            echo "Release $tag already exists; nothing new upstream."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out upstream PokeDaisy
+        if: steps.up.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: lidor30/pokedaisy
+          ref: ${{ steps.up.outputs.sha }}
+          path: upstream
+
+      - name: Toolchain (checksum-pinned, from upstream's own script)
+        if: steps.up.outputs.skip == 'false'
+        working-directory: upstream
+        run: |
+          git submodule update --init third_party/mgba
+          sudo apt-get update && sudo apt-get install -y cmake qemu-user-static
+          python3 linux/setup_trimui_sdk.py "$RUNNER_TEMP/trimui-sdk"
+          echo "NEXTUI_TOOLCHAIN=$RUNNER_TEMP/trimui-sdk/cross/x86_64-aarch64-nextui-linux-gnu" >> "$GITHUB_ENV"
+
+      - name: Build and test AArch64 under QEMU
+        if: steps.up.outputs.skip == 'false'
+        working-directory: upstream
+        run: |
+          cmake -S linux -B linux/build-arm -DCMAKE_TOOLCHAIN_FILE=trimui-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_LTO=OFF \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="qemu-aarch64-static;-L;$NEXTUI_TOOLCHAIN/aarch64-nextui-linux-gnu/libc"
+          cmake --build linux/build-arm -j2
+          ctest --test-dir linux/build-arm --output-on-failure
+
+      - name: Assemble Tools/h700/PokeDaisy.pak
+        if: steps.up.outputs.skip == 'false'
+        id: pak
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/out"
+          python3 upstream/linux/package.py upstream/linux/build-arm/pokedaisy-linux "$out"
+          pak="$RUNNER_TEMP/sd/Tools/h700/PokeDaisy.pak"
+          mkdir -p "$pak"
+          cp -a "$out/pokedaisy-linux-aarch64/." "$pak/"
+          rm -f "$pak/config.json"            # TrimUI Apps entry; not used by NextUI
+          cp pak/launch.sh "$pak/launch.sh"   # H700 launcher: data outside the pak, raw TrimUI input off
+          chmod 755 "$pak/launch.sh" "$pak/pokedaisy-linux"
+          # Record what the binary needs from the device, for debugging launch failures.
+          objdump=$NEXTUI_TOOLCHAIN/bin/aarch64-nextui-linux-gnu-objdump
+          { echo "Needed libraries:"; $objdump -p "$pak/pokedaisy-linux" | sed -n 's/^ *NEEDED */  /p'
+            echo "Highest glibc symbol version:"
+            $objdump -T "$pak/pokedaisy-linux" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | sed 's/^/  /'
+          } > "$pak/DEPENDENCIES.txt"
+          cat "$pak/DEPENDENCIES.txt"
+          zip="$RUNNER_TEMP/PokeDaisy-h700-${{ steps.up.outputs.short }}.zip"
+          (cd "$RUNNER_TEMP/sd" && zip -r -X "$zip" Tools)
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: steps.up.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.up.outputs.tag }}
+          SHA: ${{ steps.up.outputs.sha }}
+        run: |
+          set -eu
+          date=$(git -C upstream log -1 --format=%cs)
+          subject=$(git -C upstream log -1 --format=%s)
+          prev=$(gh release list --limit 1 --json tagName -q '.[0].tagName' || true)
+          {
+            echo "PokeDaisy upstream commit [\`$(printf %.7s "$SHA")\`]($UPSTREAM/commit/$SHA) ($date): $subject"
+            echo
+            if [ -n "$prev" ]; then
+              echo "Changes since the last build: $UPSTREAM/compare/${prev#upstream-}...$SHA"
+              echo
+            fi
+            echo "**Install / update:** unzip at the root of your NextUI SD card and let it replace"
+            echo "\`Tools/h700/PokeDaisy.pak\`. Games, saves and states live in \`PokeDaisy/\` on the card"
+            echo "and are not touched. Back up \`PokeDaisy/saves\` first anyway."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/sd/Tools/h700/PokeDaisy.pak/DEPENDENCIES.txt"
+            echo '```'
+          } > notes.md
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" "${{ steps.pak.outputs.zip }}" \
+            --title "PokeDaisy H700 $(printf %.7s "$SHA") ($date)" --notes-file notes.md --latest
