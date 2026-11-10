@@ -3,7 +3,7 @@
 # POSIX sh only: /bin/sh may be dash on H700.
 #
 # Games stay in NextUI's own Roms folders: all Roms/ subfolders matching a line of
-# roms-folder.txt ("Game Boy Advance*", "Nintendo DS*"). While PokeDaisy runs, a temporary folder
+# roms-folder.txt ("Game Boy*", "Nintendo DS*"). While PokeDaisy runs, a temporary folder
 # of symlinks to every game in them is mounted as PokeDaisy/roms (PokeDaisy only lists games
 # from <data>/roms). The SD card's FAT/exFAT can't hold symlinks or act as an overlayfs layer,
 # so the links live in /tmp. If that fails, the first folder is bind-mounted instead.
@@ -12,6 +12,7 @@
 #   PokeDaisy/saves/   battery saves (<full ROM filename>.sav: Emerald.gba.sav, Platinum.nds.sav)
 #   PokeDaisy/states/  save states
 #   PokeDaisy/roms/    leave empty (mount point)
+#   PokeDaisy/.unzipped/  unpacked copies of zipped Pokemon games (safe to delete; rebuilt as needed)
 set -eu
 PAK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SD="${SDCARD_PATH:-/mnt/SDCARD}"
@@ -21,7 +22,7 @@ NL='
 '
 FOLDERS="${POKEDAISY_ROMS:-}"
 if [ -z "$FOLDERS" ]; then
-  patterns=$(cat "$PAK_DIR/roms-folder.txt" 2>/dev/null || printf 'Game Boy Advance*\n')
+  patterns=$(cat "$PAK_DIR/roms-folder.txt" 2>/dev/null || printf 'Game Boy*\n')
   oldifs=$IFS; IFS=$NL
   for pattern in $patterns; do
     [ -n "$pattern" ] || continue
@@ -64,21 +65,78 @@ IFS=$oldifs
 if [ "$count" -ge 1 ]; then
   links=$(mktemp -d "${TMPDIR:-/tmp}/pokedaisy-roms.XXXXXX" 2>/dev/null) || links=""
 fi
-games=0
+# Like the Android library, list only Pokemon games: each ROM's header says which game it is.
+#   GBA (game code at 0xAC): Ruby AXV, Sapphire AXP, Emerald BPE, FireRed BPR, LeafGreen BPG
+#     (hacks built on these keep the base game's code)
+#   DS (game code at 0x0C): Diamond ADA, Pearl APA, Platinum CPU, HeartGold IPK, SoulSilver IPG,
+#     Black IRB, White IRA, Black 2 IRE, White 2 IRD
+#   GB/GBC (title at 0x134): POKEMON ..., PM_CRYSTAL
+# POKEDAISY_ALL=1 lists every game; without dd nothing is hidden.
+header() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | tr -d '\000'; }
+is_pokemon() {
+  [ "${POKEDAISY_ALL:-0}" = 1 ] && return 0
+  command -v dd > /dev/null 2>&1 || return 0
+  case "$1" in
+    *.gba|*.GBA)
+      case "$(header "$1" 172 3)" in AXV|AXP|BPE|BPR|BPG) return 0 ;; esac ;;
+    *.nds|*.NDS)
+      case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac ;;
+    *)
+      case "$(header "$1" 308 16)" in POKEMON*|PM_CRYSTAL*|*POKEMON*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+# Header check on the first bytes of a zip's (first) file, whatever its extension.
+is_pokemon_head() {
+  [ "${POKEDAISY_ALL:-0}" = 1 ] && return 0
+  case "$(header "$1" 172 3)" in AXV|AXP|BPE|BPR|BPG) return 0 ;; esac
+  case "$(header "$1" 12 3)" in ADA|APA|CPU|IPK|IPG|IRB|IRA|IRE|IRD) return 0 ;; esac
+  case "$(header "$1" 308 16)" in POKEMON*|PM_CRYSTAL*|*POKEMON*) return 0 ;; esac
+  return 1
+}
+# Zipped games: PokeDaisy reads only unpacked ROMs, so a Pokemon game's zip is unpacked once into
+# PokeDaisy/.unzipped/<zip name>/ (again only when the zip changes). .7z is not supported.
+CACHE="$DATA/.unzipped"
+unzipped_rom() {   # <zip> -> prints the unpacked ROM's path, or nothing
+  z=$1; zname=${z##*/}; dir="$CACHE/$zname"
+  stamp="$(wc -c < "$z" | tr -d ' ') $(date -r "$z" +%s 2>/dev/null)"
+  if [ ! -f "$dir/.stamp" ] || [ "$(cat "$dir/.stamp")" != "$stamp" ]; then
+    rm -rf "$dir" 2>/dev/null; mkdir -p "$dir"
+    if unzip -o -q "$z" -d "$dir" >> "$LOG" 2>&1; then echo "$stamp" > "$dir/.stamp"
+    else echo "Could not unzip $zname" >> "$LOG"; rm -rf "$dir"; return; fi
+  fi
+  for r in "$dir"/*.gba "$dir"/*.GBA "$dir"/*.gbc "$dir"/*.GBC "$dir"/*.gb "$dir"/*.GB "$dir"/*.nds "$dir"/*.NDS; do
+    [ -f "$r" ] && { echo "$r"; return; }
+  done
+}
+HEAD_TMP="${TMPDIR:-/tmp}/pokedaisy-head.$$"
+games=0; skipped=0; zips=0
 if [ -n "$links" ]; then
   oldifs=$IFS; IFS=$NL
   for d in $FOLDERS; do
     for f in "$d"/*.gba "$d"/*.GBA "$d"/*.gbc "$d"/*.GBC "$d"/*.gb "$d"/*.GB "$d"/*.nds "$d"/*.NDS; do
       [ -f "$f" ] || continue
       name=${f##*/}
+      if ! is_pokemon "$f"; then skipped=$((skipped + 1)); continue; fi
       [ -e "$links/$name" ] || { ln -s "$f" "$links/$name" && games=$((games + 1)); }
+    done
+    command -v unzip > /dev/null 2>&1 || continue
+    for z in "$d"/*.zip "$d"/*.ZIP; do
+      [ -f "$z" ] || continue
+      unzip -p "$z" 2>/dev/null | dd bs=512 count=1 2>/dev/null > "$HEAD_TMP"
+      if ! is_pokemon_head "$HEAD_TMP"; then skipped=$((skipped + 1)); continue; fi
+      r=$(unzipped_rom "$z")
+      [ -n "$r" ] || continue
+      name=${r##*/}
+      [ -e "$links/$name" ] || { ln -s "$r" "$links/$name" && games=$((games + 1)) && zips=$((zips + 1)); }
     done
   done
   IFS=$oldifs
 fi
 if [ -n "$links" ] && { mount --bind "$links" "$DATA/roms" 2>> "$LOG" || mount -o bind "$links" "$DATA/roms" 2>> "$LOG"; }; then
   mounted=1
-  echo "Games ($games) from: $(printf '%s' "$FOLDERS" | tr '\n' ';')" >> "$LOG"
+  rm -f "$HEAD_TMP"
+  echo "Pokemon games: $games, $zips of them from zips (other games hidden: $skipped) from: $(printf '%s' "$FOLDERS" | tr '\n' ';')" >> "$LOG"
 elif [ "$count" -ge 1 ] && { mount --bind "$first" "$DATA/roms" 2>> "$LOG" || mount -o bind "$first" "$DATA/roms" 2>> "$LOG"; }; then
   mounted=1
   echo "Symlink folder unavailable; games from: $first only" >> "$LOG"
