@@ -9,7 +9,9 @@
 # so the links live in /tmp. If that fails, the first folder is bind-mounted instead.
 # PokeDaisy's own files live OUTSIDE the pak, in $SDCARD_PATH/PokeDaisy/, so replacing the pak
 # with a newer build never touches them:
-#   PokeDaisy/saves/   battery saves (<full ROM filename>.sav: Emerald.gba.sav, Platinum.nds.sav)
+#   PokeDaisy/saves/   battery saves (<full ROM filename>.sav: Emerald.gba.sav, Platinum.nds.sav),
+#                      kept in step with the Android app's Saves/pokedaisy (see sync_saves)
+#   PokeDaisy/backups/ copies of saves taken before either side is overwritten
 #   PokeDaisy/states/  save states
 #   PokeDaisy/roms/    leave empty (mount point)
 #   PokeDaisy/.unzipped/  unpacked copies of zipped supported games (safe to delete; rebuilt as needed)
@@ -81,7 +83,7 @@ CHECK=1
 if [ "${POKEDAISY_ALL:-0}" = 1 ]; then CHECK=0
 elif [ ! -s "$COMPAT" ]; then CHECK=0; echo "No compatibility list: listing every game" >> "$LOG"
 else
-  for t in od dd sha1sum grep; do
+  for t in od dd sha1sum grep stat; do
     command -v "$t" > /dev/null 2>&1 || { CHECK=0; echo "No $t: listing every game" >> "$LOG"; }
   done
 fi
@@ -92,8 +94,10 @@ LISTID=$(cksum < "$COMPAT" 2>/dev/null | cut -d' ' -f1); LISTID=${LISTID:-none}
 hexat() { od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null | tr -d ' \n'; }
 chars() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null; }
 has() { grep -qxF "$1" "$COMPAT"; }
-fsize() { wc -c < "$1" | tr -d ' '; }
-stamp() { echo "$(fsize "$1") $(date -r "$1" +%s 2>/dev/null || echo 0)"; }
+# Size and date from the file's metadata only: busybox's wc -c reads the whole file, which for a
+# library of DS zips meant gigabytes read on every launch.
+fsize() { stat -c %s "$1" 2>/dev/null || ls -ln "$1" | awk '{print $5}'; }
+stamp() { stat -c '%s %Y' "$1" 2>/dev/null || ls -ln --time-style=+%s "$1" 2>/dev/null | awk '{print $5, $6}' || fsize "$1"; }
 # quick <file holding the ROM's start> <ROM size, or empty>: yes / no / sha (needs the SHA-1)
 quick() {
   if [ "$(hexat "$1" 260 4)" = ceed6666 ]; then echo sha; return; fi       # Game Boy logo at 0x104
@@ -139,8 +143,9 @@ verdict_file() {   # <ROM>
 # PokeDaisy/.unzipped/<zip name>/ (again only when the zip changes). .7z is not supported.
 CACHE="$DATA/.unzipped"
 unzipped_rom() {   # <zip> -> prints the unpacked ROM's path, or nothing
-  z=$1; zname=${z##*/}; dir="$CACHE/$zname"; st=$(stamp "$z")
-  if [ ! -f "$dir/.stamp" ] || [ "$(cat "$dir/.stamp")" != "$st" ]; then
+  z=$1; zname=${z##*/}; dir="$CACHE/$zname"; st=$(fsize "$z")   # a changed zip has a new size
+  old=""; [ -f "$dir/.stamp" ] && old=$(cat "$dir/.stamp")
+  if [ "${old%% *}" != "$st" ]; then
     rm -rf "$dir" 2>/dev/null; mkdir -p "$dir"
     if unzip -o -q "$z" -d "$dir" >> "$LOG" 2>&1; then echo "$st" > "$dir/.stamp"
     else echo "Could not unzip $zname" >> "$LOG"; rm -rf "$dir"; return; fi
@@ -190,6 +195,43 @@ if [ -n "$links" ]; then
   mv -f "$NEWV" "$VCACHE" 2>/dev/null || true
   rm -f "$HEAD_TMP"
 fi
+# Saves shared with the Android app (Syncthing): $SD/Saves/pokedaisy holds "<ROM name without
+# extension>.sav" (or .srm); PokeDaisy Linux keeps "<ROM name with extension>.sav" in PokeDaisy/saves.
+# Before the game: a newer shared save is copied in. After: a newer PokeDaisy save is copied back.
+# Each overwritten save is first copied to PokeDaisy/backups/. Dates come from the device clock.
+SHARED="${POKEDAISY_SHARED_SAVES:-$SD/Saves/pokedaisy}"
+BACKUPS="$DATA/backups"
+shared_save() {   # <ROM name> -> the shared save path to use (existing .sav, else existing .srm, else .sav)
+  b=${1%.*}
+  if [ -f "$SHARED/$b.sav" ]; then echo "$SHARED/$b.sav"
+  elif [ -f "$SHARED/$b.srm" ]; then echo "$SHARED/$b.srm"
+  else echo "$SHARED/$b.sav"; fi
+}
+keep_copy() {   # <file> : copy it to PokeDaisy/backups with a timestamp
+  [ -f "$1" ] || return 0
+  mkdir -p "$BACKUPS"; cp "$1" "$BACKUPS/${1##*/}.$(date +%Y%m%d-%H%M%S)" 2>> "$LOG" || true
+}
+sync_saves() {   # in | out
+  [ -n "$links" ] && [ -d "$SHARED" ] || return 0
+  n_in=0; n_out=0
+  for l in "$links"/*; do
+    [ -e "$l" ] || continue
+    name=${l##*/}; mine="$DATA/saves/$name.sav"; theirs=$(shared_save "$name")
+    if [ "$1" = in ]; then
+      if [ -f "$theirs" ] && { [ ! -f "$mine" ] || [ "$theirs" -nt "$mine" ]; }; then
+        keep_copy "$mine"; cp "$theirs" "$mine" && touch -r "$theirs" "$mine" && n_in=$((n_in + 1))
+      fi
+    else
+      if [ -f "$mine" ] && { [ ! -f "$theirs" ] || [ "$mine" -nt "$theirs" ]; }; then
+        keep_copy "$theirs"; cp "$mine" "$theirs" && touch -r "$mine" "$theirs" && n_out=$((n_out + 1))
+      fi
+    fi
+  done
+  [ "$1" = in ] && echo "Saves copied in from $SHARED: $n_in" >> "$LOG"
+  [ "$1" = out ] && echo "Saves copied back to $SHARED: $n_out" >> "$LOG"
+  return 0
+}
+sync_saves in
 if [ -n "$links" ] && { mount --bind "$links" "$DATA/roms" 2>> "$LOG" || mount -o bind "$links" "$DATA/roms" 2>> "$LOG"; }; then
   mounted=1
   echo "Supported games: $games, $zips of them from zips (other games hidden: $skipped) from: $(printf '%s' "$FOLDERS" | tr '\n' ';')" >> "$LOG"
@@ -202,6 +244,8 @@ else
   echo "No matching Roms folders; listing $DATA/roms instead" >> "$LOG"
 fi
 cleanup() {
+  sync_saves out
+  sync
   if [ "$mounted" = 1 ]; then
     sync
     umount "$DATA/roms" 2>> "$LOG" || umount -l "$DATA/roms" 2>> "$LOG" || true

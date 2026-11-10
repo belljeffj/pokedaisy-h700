@@ -23,6 +23,11 @@ exact upstream commit it was built from, and `SOURCE.txt` inside the pak records
     with the weekly release. Games come from NextUI's `Roms/Game Boy*` and `Roms/Nintendo DS*`
     folders, via symlinks in /tmp mounted onto `PokeDaisy/roms` while PokeDaisy runs.
     `POKEDAISY_ALL=1` in `launch.sh` lists every game instead;
+  - keeps saves in step with the Android app's Syncthing folder `Saves/pokedaisy` (Android names
+    saves `<ROM name>.sav`/`.srm`, PokeDaisy Linux `<ROM name>.<ext>.sav`): a newer shared save is
+    copied in before the game, a newer PokeDaisy save copied back after; every overwritten save is
+    copied to `PokeDaisy/backups/` first. `POKEDAISY_SHARED_SAVES` changes the folder;
+  - reads file sizes and dates from metadata (stat), so later launches don't re-read the library;
   - handles zipped games: a supported game's `.zip` is unpacked once into `PokeDaisy/.unzipped/`
     (again only when the zip changes; safe to delete). `.7z` is not supported;
   - keeps PokeDaisy's saves and states in `PokeDaisy/` at the SD card root, outside the pak, so
