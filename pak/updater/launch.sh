@@ -29,7 +29,10 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 PRESENTER="$PAK_DIR/bin/$PLAT/minui-presenter"
 [ -f "$PRESENTER" ] && chmod 755 "$PRESENTER" 2>/dev/null
 UI_PID=""
-ui_clear() { if [ -n "$UI_PID" ]; then kill "$UI_PID" 2>/dev/null; wait "$UI_PID" 2>/dev/null; UI_PID=""; fi; }
+ui_clear() {   # by PID and by name, as other NextUI paks do: a message left up would cover the next one
+  if [ -n "$UI_PID" ]; then kill "$UI_PID" 2>/dev/null; wait "$UI_PID" 2>/dev/null; UI_PID=""; fi
+  killall minui-presenter > /dev/null 2>&1 || true
+}
 show() {     # <message>: stays up while work continues
   ui_clear
   [ -x "$PRESENTER" ] || return 0
@@ -40,6 +43,7 @@ finish() {   # <message>: waits for A, then the updater exits
   ui_clear
   [ -x "$PRESENTER" ] || return 0
   "$PRESENTER" --message "$1" --timeout 0 --confirm-show --confirm-text "OK" > /dev/null 2>&1
+  killall minui-presenter > /dev/null 2>&1 || true
 }
 trap 'ui_clear' EXIT
 bar() {      # <percent> -> [#####-----] 50%
